@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { Anthropic } from '@anthropic-ai/sdk';
+import Anthropic from '@anthropic-ai/sdk';
 import pdfParse from 'pdf-parse';
 import mammoth from 'mammoth';
 
-const anthropic = new Anthropic({
+const client = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY!,
 });
 
@@ -22,35 +22,50 @@ export async function POST(request: NextRequest) {
     
     if (name.endsWith('.pdf')) {
       const data = await pdfParse(buffer);
-      text = data.text;
+      text = data.text.slice(0, 4000);
     } else if (name.match(/\.(doc|docx)$/)) {
       const result = await mammoth.extractRawText({ buffer });
-      text = result.value;
+      text = result.value.slice(0, 4000);
     } else {
       return NextResponse.json({ error: 'PDF/DOC only' }, { status: 400 });
     }
 
-    const response = await anthropic.messages.create({
+    // CORRECT Anthropic SDK usage
+    const response = await client.messages.create({
       model: 'claude-3-5-sonnet-20241022',
-      max_tokens: 800,
+      max_tokens: 600,
       messages: [{
         role: 'user',
-        content: `GDPR/CCPA gaps. JSON only:
+        content: `Analyze GDPR/CCPA compliance gaps. Return ONLY valid JSON:
 
 {
-  "gdr": {"risk_score":5,"findings":["Missing consent","No DPA"]},
-  "ccpa": {"risk_score":4,"findings":["No opt-out"]},
+  "gdr": {
+    "risk_score": 5,
+    "findings": ["Missing consent form", "No Data Processing Agreement"]
+  },
+  "ccpa": {
+    "risk_score": 4,
+    "findings": ["No \"Do Not Sell\" link", "Missing data categories"]
+  },
   "overall_risk_score": 5
 }
 
-Doc: ${text.slice(0, 4000)}`
+Document content: ${text}`
       }]
     });
 
-    const analysis = JSON.parse(response.content[0].text);
-    return NextResponse.json({ success: true, ...analysis });
+    // Parse AI response
+    const content = response.content[0].text;
+    const analysis = JSON.parse(content);
+    
+    return NextResponse.json({ 
+      success: true, 
+      filename: file.name,
+      ...analysis 
+    });
     
   } catch (error: any) {
-    return NextResponse.json({ error: 'Failed' }, { status: 500 });
+    console.error('Error:', error.message);
+    return NextResponse.json({ error: 'Analysis failed' }, { status: 500 });
   }
 }
